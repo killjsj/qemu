@@ -1,0 +1,6 @@
+CompileFlags:
+  Add: [-include, qemu/osdep.h]
+  Remove: [-Wunknown-pragmas]
+
+Diagnostics:
+  Suppress: ["-Wunknown-pragmas", "drv_unknown_argument","-Wpragma-pack"]

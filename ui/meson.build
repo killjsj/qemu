@@ -14,6 +14,7 @@ system_ss.add(files(
   'qemu-pixman.c',
   'ui-hmp-cmds.c',
   'ui-qmp-cmds.c',
+  'sharedbuffer.c',
   'util.c',
 ))
 system_ss.add(when: pixman, if_true: files('console-vc.c'), if_false: files('console-vc-stubs.c'))

@@ -2204,6 +2204,7 @@ DEF("display", HAS_ARG, QEMU_OPTION_display,
 #if defined(CONFIG_SPICE)
     "-display spice-app[,gl=on|off]\n"
 #endif
+    "-display shardbuffer[,id=str,](Warning,Internal used)\n"
 #if defined(CONFIG_SDL)
     "-display sdl[,gl=on|core|es|off][,grab-mod=<mod>][,show-cursor=on|off]\n"
     "            [,window-close=on|off]\n"

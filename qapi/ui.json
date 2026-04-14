@@ -1492,6 +1492,8 @@
 #
 # @gtk: The GTK user interface.
 #
+# @sharedbuffer: sharedbuffer.
+#
 # @sdl: The SDL user interface.
 #
 # @egl-headless: No user interface, offload GL operations to a local
@@ -1519,6 +1521,7 @@
   'data'    : [
     { 'name': 'default' },
     { 'name': 'none' },
+    { 'name': 'sharedbuffer'},
     { 'name': 'gtk', 'if': 'CONFIG_GTK' },
     { 'name': 'sdl', 'if': 'CONFIG_SDL' },
     { 'name': 'egl-headless', 'if': 'CONFIG_OPENGL' },
@@ -1528,7 +1531,17 @@
     { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' }
   ]
 }
-
+##
+# @DisplaySharedBuffer:
+#
+# DisplaySharedBuffer options.
+#
+# @id: Shared memories id.
+#
+# Since: 9.0
+##
+{ 'struct': 'DisplaySharedBuffer',
+  'data': { 'id': 'str' } }
 ##
 # @DisplayOptions:
 #
@@ -1558,6 +1571,7 @@
   'discriminator' : 'type',
   'data'    : {
       'gtk': { 'type': 'DisplayGTK', 'if': 'CONFIG_GTK' },
+      'sharedbuffer': { 'type': 'DisplaySharedBuffer'},
       'cocoa': { 'type': 'DisplayCocoa', 'if': 'CONFIG_COCOA' },
       'curses': { 'type': 'DisplayCurses', 'if': 'CONFIG_CURSES' },
       'egl-headless': { 'type': 'DisplayEGLHeadless',
