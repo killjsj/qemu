@@ -1,3 +1,6 @@
+this is a subproject of https://github.com/killjsj/ReadBufferFromQemu
+it have a new custom ui called sharedbuffer
+
 ===========
 QEMU README
 ===========
