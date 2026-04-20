@@ -107,6 +107,7 @@ static void sb_2d_refresh(DisplayChangeListener *dcl) {
             ss->Server_B_Available = false;
                 ss->ServerWritingA = false;
         }
+        ss->isNewFrame = true;
         UnlockScreen(ss, true);
     }
 }
