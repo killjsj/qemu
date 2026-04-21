@@ -42,7 +42,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: tests/docker/dockerfiles/centos-9.docker
+          file: tests/docker/dockerfiles/centos9.docker
           push: false
           tags: qemu/centos9:${{ github.sha }}
           load: true
