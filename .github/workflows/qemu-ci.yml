@@ -1,13 +1,13 @@
 # GitHub Actions CI for QEMU
-# Converted from .gitlab-ci.yml and .gitlab-ci.d/ configs.
+# Converted from .gitlab-ci.yml and .gitlab-ci.d/
 #
-# Key differences from GitLab CI:
-#  - Container pre-build stage is replaced by direct Docker image pulls from
-#    the upstream QEMU GitLab container registry (read-only public images).
-#  - ccache is handled via actions/cache instead of GitLab cache.
-#  - Artifacts use actions/upload-artifact / download-artifact.
-#  - Windows job uses a native windows-latest runner with MSYS2 action.
-#  - Cross-build jobs run inside the appropriate cross-compiler Docker images.
+# Stages:
+#   1. containers  — build & push all Docker images to GHCR
+#   2. build       — native + cross-compile builds (pull images from GHCR)
+#   3. test        — run unit/qtest/functional suites against build artifacts
+#
+# Required repository secrets: none beyond the default GITHUB_TOKEN.
+# GHCR images are pushed to ghcr.io/<owner>/<repo>/qemu/<name>:latest
 
 name: QEMU CI
 
@@ -16,21 +16,410 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+  schedule:
+    # Weekly container rebuild — mirrors GitLab's weekly-container-builds job
+    - cron: "0 2 * * 0"
 
-env:
-  QEMU_CI_CONTAINER_REGISTRY: registry.gitlab.com/qemu-project/qemu
-  QEMU_CI_CONTAINER_TAG: latest
-
-# ── Concurrency ───────────────────────────────────────────────────────────────
-# Cancel in-flight runs for the same branch on new pushes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STATIC CHECKS
-# ─────────────────────────────────────────────────────────────────────────────
+env:
+  REGISTRY: ghcr.io
+  # e.g. ghcr.io/killjsj/qemu/qemu
+  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/qemu/qemu
+
+# ═════════════════════════════════════════════════════════════════════════════
 jobs:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 1 — CONTAINERS
+# Each job builds one Dockerfile from tests/docker/dockerfiles/<name>.docker
+# and pushes it to GHCR. The upstream QEMU GitLab registry is used as a layer
+# cache source so only changed layers are rebuilt.
+# ─────────────────────────────────────────────────────────────────────────────
+
+  container-alpine:
+    name: "container: alpine"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/alpine.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/alpine:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/alpine:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/alpine:latest
+          cache-to: type=inline
+
+  container-debian:
+    name: "container: debian"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/debian.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/debian:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/debian:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/debian:latest
+          cache-to: type=inline
+
+  container-ubuntu2204:
+    name: "container: ubuntu2204"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/ubuntu2204.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/ubuntu2204:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/ubuntu2204:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/ubuntu2204:latest
+          cache-to: type=inline
+
+  container-fedora:
+    name: "container: fedora"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/fedora.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/fedora:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/fedora:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/fedora:latest
+          cache-to: type=inline
+
+  container-centos9:
+    name: "container: centos9"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/centos9.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/centos9:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/centos9:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/centos9:latest
+          cache-to: type=inline
+
+  container-opensuse-leap:
+    name: "container: opensuse-leap"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/opensuse-leap.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/opensuse-leap:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/opensuse-leap:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/opensuse-leap:latest
+          cache-to: type=inline
+
+  container-python:
+    name: "container: python"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/python.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/python:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/python:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/python:latest
+          cache-to: type=inline
+
+  container-fedora-rust-nightly:
+    name: "container: fedora-rust-nightly"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/fedora-rust-nightly.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/fedora-rust-nightly:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/fedora-rust-nightly:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/fedora-rust-nightly:latest
+          cache-to: type=inline
+
+  # ── Cross-compiler images ─────────────────────────────────────────────────
+
+  container-debian-arm64-cross:
+    name: "container: debian-arm64-cross"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/debian-arm64-cross.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/debian-arm64-cross:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/debian-arm64-cross:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/debian-arm64-cross:latest
+          cache-to: type=inline
+
+  container-debian-mips64el-cross:
+    name: "container: debian-mips64el-cross"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/debian-mips64el-cross.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/debian-mips64el-cross:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/debian-mips64el-cross:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/debian-mips64el-cross:latest
+          cache-to: type=inline
+
+  container-debian-ppc64el-cross:
+    name: "container: debian-ppc64el-cross"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/debian-ppc64el-cross.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/debian-ppc64el-cross:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/debian-ppc64el-cross:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/debian-ppc64el-cross:latest
+          cache-to: type=inline
+
+  container-debian-riscv64-cross:
+    name: "container: debian-riscv64-cross"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/debian-riscv64-cross.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/debian-riscv64-cross:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/debian-riscv64-cross:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/debian-riscv64-cross:latest
+          cache-to: type=inline
+
+  container-debian-s390x-cross:
+    name: "container: debian-s390x-cross"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/debian-s390x-cross.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/debian-s390x-cross:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/debian-s390x-cross:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/debian-s390x-cross:latest
+          cache-to: type=inline
+
+  container-debian-all-test-cross:
+    name: "container: debian-all-test-cross"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/debian-all-test-cross.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/debian-all-test-cross:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/debian-all-test-cross:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/debian-all-test-cross:latest
+          cache-to: type=inline
+
+  container-fedora-win64-cross:
+    name: "container: fedora-win64-cross"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: tests/docker/dockerfiles/fedora-win64-cross.docker
+          push: true
+          tags: ${{ env.IMAGE_BASE }}/fedora-win64-cross:latest
+          cache-from: |
+            type=registry,ref=${{ env.IMAGE_BASE }}/fedora-win64-cross:latest
+            type=registry,ref=registry.gitlab.com/qemu-project/qemu/qemu/fedora-win64-cross:latest
+          cache-to: type=inline
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — STATIC CHECKS
+# ─────────────────────────────────────────────────────────────────────────────
 
   check-patch:
     name: check-patch
@@ -42,11 +431,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1000
-      - name: Install deps
-        run: apk -U add git perl
-      - name: Run check-patch
-        run: .gitlab-ci.d/check-patch.py
-        continue-on-error: true   # allow_failure: true
+      - run: apk -U add git perl
+      - run: .gitlab-ci.d/check-patch.py
+        continue-on-error: true
 
   check-dco:
     name: check-dco
@@ -57,85 +444,86 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1000
-      - name: Install deps
-        run: apk -U add git
-      - name: Run check-dco
-        run: .gitlab-ci.d/check-dco.py
+      - run: apk -U add git
+      - run: .gitlab-ci.d/check-dco.py
 
   check-build-units:
     name: check-build-units
     runs-on: ubuntu-latest
+    needs: [container-debian]
     container:
-      image: registry.gitlab.com/qemu-project/qemu/debian:latest
+      image: ${{ env.IMAGE_BASE }}/debian:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
           submodules: recursive
-      - name: Install jq
-        run: apt install --assume-yes --no-install-recommends jq
-      - name: Configure
-        run: |
-          mkdir build
-          cd build
-          ../configure
-      - name: Analyse build units
-        run: .gitlab-ci.d/check-units.py build/compile_commands.json
+      - run: apt install --assume-yes --no-install-recommends jq
+      - run: mkdir build && cd build && ../configure
+      - run: .gitlab-ci.d/check-units.py build/compile_commands.json
 
   check-python-minreqs:
     name: check-python-minreqs
     runs-on: ubuntu-latest
-    needs: []
+    needs: [container-python]
     container:
-      image: registry.gitlab.com/qemu-project/qemu/python:latest
+      image: ${{ env.IMAGE_BASE }}/python:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Check minimum requirements
-        run: make -C python check-minreqs
+      - run: make -C python check-minreqs
 
   check-python-tox:
     name: check-python-tox (optional)
     runs-on: ubuntu-latest
-    needs: []
+    needs: [container-python]
+    continue-on-error: true
     container:
-      image: registry.gitlab.com/qemu-project/qemu/python:latest
-    continue-on-error: true   # optional job
+      image: ${{ env.IMAGE_BASE }}/python:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Run tox
-        run: make -C python check-tox
+      - run: make -C python check-tox
         env:
           QEMU_TOX_EXTRA_ARGS: --skip-missing-interpreters=false
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NATIVE BUILDS — Alpine
+# STAGE 2 — NATIVE BUILDS
 # ─────────────────────────────────────────────────────────────────────────────
 
   build-system-alpine:
     name: build-system-alpine
     runs-on: ubuntu-latest
+    needs: [container-alpine]
     container:
-      image: registry.gitlab.com/qemu-project/qemu/alpine:latest
+      image: ${{ env.IMAGE_BASE }}/alpine:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
           filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ccache
           key: build-system-alpine-${{ github.sha }}
           restore-keys: build-system-alpine-
       - name: Build
         run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
           export PATH="$CCACHE_WRAPPERSDIR:$PATH"
           JOBS=$(expr $(nproc) + 1)
           mkdir build && cd build
@@ -145,24 +533,427 @@ jobs:
             --target-list="avr-softmmu loongarch64-softmmu mips64-softmmu mipsel-softmmu" \
             --enable-trace-backends=log,simple,syslog || \
             { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          make -j"$JOBS" check-build
+          make -j"$JOBS" && make -j"$JOBS" check-build
           ccache --show-stats
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: build-system-alpine
           path: |
             build/
             .git-submodule-status
           retention-days: 2
+          exclude: |
+            build/**/*.p
+            build/**/*.a.p
+            build/**/*.c.o
+            build/**/*.c.o.d
+
+  build-system-ubuntu:
+    name: build-system-ubuntu
+    runs-on: ubuntu-latest
+    needs: [container-ubuntu2204]
+    container:
+      image: ${{ env.IMAGE_BASE }}/ubuntu2204:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: build-system-ubuntu-${{ github.sha }}
+          restore-keys: build-system-ubuntu-
+      - name: Build
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          export PATH="$CCACHE_WRAPPERSDIR:$PATH"
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build
+          ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info \
+            --target-list="alpha-softmmu microblaze-softmmu mips64el-softmmu" \
+            --enable-docs --enable-rust || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && make -j"$JOBS" check-build
+          ccache --show-stats
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-system-ubuntu
+          path: |
+            build/
+            .git-submodule-status
+          retention-days: 2
+          exclude: |
+            build/**/*.p
+            build/**/*.a.p
+            build/**/*.c.o
+            build/**/*.c.o.d
+
+  build-system-debian:
+    name: build-system-debian
+    runs-on: ubuntu-latest
+    needs: [container-debian]
+    container:
+      image: ${{ env.IMAGE_BASE }}/debian:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: build-system-debian-${{ github.sha }}
+          restore-keys: build-system-debian-
+      - name: Build
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          export PATH="$CCACHE_WRAPPERSDIR:$PATH"
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build
+          ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info \
+            --target-list="arm-softmmu i386-softmmu riscv64-softmmu sh4eb-softmmu sparc-softmmu xtensa-softmmu" \
+            --with-coroutine=sigaltstack --enable-rust || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && make -j"$JOBS" check-build
+          ccache --show-stats
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-system-debian
+          path: |
+            build/
+            .git-submodule-status
+          retention-days: 2
+          exclude: |
+            build/**/*.p
+            build/**/*.a.p
+            build/**/*.c.o
+            build/**/*.c.o.d
+
+  build-system-fedora:
+    name: build-system-fedora
+    runs-on: ubuntu-latest
+    needs: [container-fedora]
+    container:
+      image: ${{ env.IMAGE_BASE }}/fedora:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: build-system-fedora-${{ github.sha }}
+          restore-keys: build-system-fedora-
+      - name: Build
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          export PATH="$CCACHE_WRAPPERSDIR:$PATH"
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build
+          ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info \
+            --target-list="mips-softmmu xtensa-softmmu m68k-softmmu riscv32-softmmu ppc-softmmu sparc64-softmmu" \
+            --disable-gcrypt --enable-nettle --enable-crypto-afalg --enable-rust || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && make -j"$JOBS" check-build check-doc
+          ccache --show-stats
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-system-fedora
+          path: |
+            build/
+            .git-submodule-status
+          retention-days: 2
+          exclude: |
+            build/**/*.p
+            build/**/*.a.p
+            build/**/*.c.o
+            build/**/*.c.o.d
+
+  build-system-fedora-rust-nightly:
+    name: build-system-fedora-rust-nightly (optional)
+    runs-on: ubuntu-latest
+    needs: [container-fedora-rust-nightly]
+    continue-on-error: true
+    container:
+      image: ${{ env.IMAGE_BASE }}/fedora-rust-nightly:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: build-fedora-rust-nightly-${{ github.sha }}
+          restore-keys: build-fedora-rust-nightly-
+      - name: Build
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          export PATH="$CCACHE_WRAPPERSDIR:$PATH"
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build
+          ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info \
+            --target-list="aarch64-softmmu" \
+            --enable-rust --enable-strict-rust-lints || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && make -j"$JOBS" check-build check-doc
+          ccache --show-stats
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-system-fedora-rust-nightly
+          path: |
+            build/
+            .git-submodule-status
+          retention-days: 2
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — CROSS BUILDS
+# ─────────────────────────────────────────────────────────────────────────────
+
+  cross-arm64-system:
+    name: cross-arm64-system
+    runs-on: ubuntu-latest
+    needs: [container-debian-arm64-cross]
+    container:
+      image: ${{ env.IMAGE_BASE }}/debian-arm64-cross:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: cross-arm64-system-${{ github.sha }}
+          restore-keys: cross-arm64-system-
+      - name: Cross-build (arm64 system)
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build && ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info --cross-prefix=aarch64-linux-gnu- || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && ccache --show-stats
+
+  cross-arm64-user:
+    name: cross-arm64-user
+    runs-on: ubuntu-latest
+    needs: [container-debian-arm64-cross]
+    container:
+      image: ${{ env.IMAGE_BASE }}/debian-arm64-cross:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: cross-arm64-user-${{ github.sha }}
+          restore-keys: cross-arm64-user-
+      - name: Cross-build (arm64 user)
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build && ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info --cross-prefix=aarch64-linux-gnu- \
+            --without-default-features --enable-linux-user || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && ccache --show-stats
+
+  cross-arm64-kvm-only:
+    name: cross-arm64-kvm-only
+    runs-on: ubuntu-latest
+    needs: [container-debian-arm64-cross]
+    container:
+      image: ${{ env.IMAGE_BASE }}/debian-arm64-cross:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: cross-arm64-kvm-only-${{ github.sha }}
+          restore-keys: cross-arm64-kvm-only-
+      - name: Cross-build (arm64 KVM only)
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build && ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info --cross-prefix=aarch64-linux-gnu- \
+            --disable-tcg --without-default-features || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && ccache --show-stats
+
+  cross-mips64el-system:
+    name: cross-mips64el-system
+    runs-on: ubuntu-latest
+    needs: [container-debian-mips64el-cross]
+    container:
+      image: ${{ env.IMAGE_BASE }}/debian-mips64el-cross:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: cross-mips64el-system-${{ github.sha }}
+          restore-keys: cross-mips64el-system-
+      - name: Cross-build
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build && ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info --cross-prefix=mips64el-linux-gnuabi64- \
+            --target-list="mips64el-softmmu" || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && ccache --show-stats
+
+  cross-ppc64el-system:
+    name: cross-ppc64el-system
+    runs-on: ubuntu-latest
+    needs: [container-debian-ppc64el-cross]
+    container:
+      image: ${{ env.IMAGE_BASE }}/debian-ppc64el-cross:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: cross-ppc64el-system-${{ github.sha }}
+          restore-keys: cross-ppc64el-system-
+      - name: Cross-build
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build && ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info --cross-prefix=powerpc64le-linux-gnu- \
+            --target-list="ppc64-softmmu" || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && ccache --show-stats
+
+  cross-riscv64-system:
+    name: cross-riscv64-system
+    runs-on: ubuntu-latest
+    needs: [container-debian-riscv64-cross]
+    container:
+      image: ${{ env.IMAGE_BASE }}/debian-riscv64-cross:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: cross-riscv64-system-${{ github.sha }}
+          restore-keys: cross-riscv64-system-
+      - name: Cross-build
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build && ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info --cross-prefix=riscv64-linux-gnu- \
+            --target-list="riscv64-softmmu" || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && ccache --show-stats
+
+  cross-s390x-system:
+    name: cross-s390x-system
+    runs-on: ubuntu-latest
+    needs: [container-debian-s390x-cross]
+    container:
+      image: ${{ env.IMAGE_BASE }}/debian-s390x-cross:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          filter: blob:none
+      - uses: actions/cache@v4
+        with:
+          path: ccache
+          key: cross-s390x-system-${{ github.sha }}
+          restore-keys: cross-s390x-system-
+      - name: Cross-build
+        run: |
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
+          JOBS=$(expr $(nproc) + 1)
+          mkdir build && cd build && ccache --zero-stats
+          ../configure --enable-werror --disable-docs --enable-fdt=system \
+            --disable-debug-info --cross-prefix=s390x-linux-gnu- \
+            --target-list="s390x-softmmu" || \
+            { cat config.log meson-logs/meson-log.txt; exit 1; }
+          make -j"$JOBS" && ccache --show-stats
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 3 — TESTS
+# ─────────────────────────────────────────────────────────────────────────────
 
   check-system-alpine:
     name: check-system-alpine
     runs-on: ubuntu-latest
-    needs: build-system-alpine
+    needs: [build-system-alpine]
     container:
-      image: registry.gitlab.com/qemu-project/qemu/alpine:latest
+      image: ${{ env.IMAGE_BASE }}/alpine:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -175,8 +966,7 @@ jobs:
         run: |
           scripts/git-submodule.sh update roms/SLOF
           build/pyvenv/bin/meson subprojects download $(cd build/subprojects && echo *)
-          cd build
-          find . -type f -exec touch {} +
+          cd build && find . -type f -exec touch {} +
           make NINJA=":" MTESTARGS="--no-suite doc" check-unit check-qtest
       - uses: actions/upload-artifact@v4
         if: always()
@@ -185,57 +975,15 @@ jobs:
           path: build/meson-logs/
           retention-days: 7
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NATIVE BUILDS — Ubuntu 22.04
-# ─────────────────────────────────────────────────────────────────────────────
-
-  build-system-ubuntu:
-    name: build-system-ubuntu
-    runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/ubuntu2204:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: build-system-ubuntu-${{ github.sha }}
-          restore-keys: build-system-ubuntu-
-      - name: Build
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          export PATH="$CCACHE_WRAPPERSDIR:$PATH"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info \
-            --target-list="alpha-softmmu microblaze-softmmu mips64el-softmmu" \
-            --enable-docs --enable-rust || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          make -j"$JOBS" check-build
-          ccache --show-stats
-      - uses: actions/upload-artifact@v4
-        with:
-          name: build-system-ubuntu
-          path: |
-            build/
-            .git-submodule-status
-          retention-days: 2
-
   check-system-ubuntu:
     name: check-system-ubuntu
     runs-on: ubuntu-latest
-    needs: build-system-ubuntu
+    needs: [build-system-ubuntu]
     container:
-      image: registry.gitlab.com/qemu-project/qemu/ubuntu2204:latest
+      image: ${{ env.IMAGE_BASE }}/ubuntu2204:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -257,57 +1005,15 @@ jobs:
           path: build/meson-logs/
           retention-days: 7
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NATIVE BUILDS — Debian
-# ─────────────────────────────────────────────────────────────────────────────
-
-  build-system-debian:
-    name: build-system-debian
-    runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/debian:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: build-system-debian-${{ github.sha }}
-          restore-keys: build-system-debian-
-      - name: Build
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          export PATH="$CCACHE_WRAPPERSDIR:$PATH"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info \
-            --target-list="arm-softmmu i386-softmmu riscv64-softmmu sh4eb-softmmu sparc-softmmu xtensa-softmmu" \
-            --with-coroutine=sigaltstack --enable-rust || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          make -j"$JOBS" check-build
-          ccache --show-stats
-      - uses: actions/upload-artifact@v4
-        with:
-          name: build-system-debian
-          path: |
-            build/
-            .git-submodule-status
-          retention-days: 2
-
   check-system-debian:
     name: check-system-debian
     runs-on: ubuntu-latest
-    needs: build-system-debian
+    needs: [build-system-debian]
     container:
-      image: registry.gitlab.com/qemu-project/qemu/debian:latest
+      image: ${{ env.IMAGE_BASE }}/debian:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -332,9 +1038,12 @@ jobs:
   crash-test-debian:
     name: crash-test-debian
     runs-on: ubuntu-latest
-    needs: build-system-debian
+    needs: [build-system-debian]
     container:
-      image: registry.gitlab.com/qemu-project/qemu/debian:latest
+      image: ${{ env.IMAGE_BASE }}/debian:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -345,61 +1054,18 @@ jobs:
           name: build-system-debian
       - name: Crash test
         run: |
-          cd build
-          find . -type f -exec touch {} +
+          cd build && find . -type f -exec touch {} +
           ./run scripts/device-crash-test -q --tcg-only ./qemu-system-i386
-
-# ─────────────────────────────────────────────────────────────────────────────
-# NATIVE BUILDS — Fedora
-# ─────────────────────────────────────────────────────────────────────────────
-
-  build-system-fedora:
-    name: build-system-fedora
-    runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/fedora:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: build-system-fedora-${{ github.sha }}
-          restore-keys: build-system-fedora-
-      - name: Build
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          export PATH="$CCACHE_WRAPPERSDIR:$PATH"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info \
-            --target-list="mips-softmmu xtensa-softmmu m68k-softmmu riscv32-softmmu ppc-softmmu sparc64-softmmu" \
-            --disable-gcrypt --enable-nettle --enable-crypto-afalg --enable-rust || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          make -j"$JOBS" check-build check-doc
-          ccache --show-stats
-      - uses: actions/upload-artifact@v4
-        with:
-          name: build-system-fedora
-          path: |
-            build/
-            .git-submodule-status
-          retention-days: 2
 
   check-system-fedora:
     name: check-system-fedora
     runs-on: ubuntu-latest
-    needs: build-system-fedora
+    needs: [build-system-fedora]
     container:
-      image: registry.gitlab.com/qemu-project/qemu/fedora:latest
+      image: ${{ env.IMAGE_BASE }}/fedora:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -421,55 +1087,16 @@ jobs:
           path: build/meson-logs/
           retention-days: 7
 
-  build-system-fedora-rust-nightly:
-    name: build-system-fedora-rust-nightly (optional)
-    runs-on: ubuntu-latest
-    continue-on-error: true   # allow_failure: true
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/fedora-rust-nightly:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: build-fedora-rust-nightly-${{ github.sha }}
-          restore-keys: build-fedora-rust-nightly-
-      - name: Build
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          export PATH="$CCACHE_WRAPPERSDIR:$PATH"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info \
-            --target-list="aarch64-softmmu" \
-            --disable-docs --enable-rust --enable-strict-rust-lints || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          make -j"$JOBS" check-build check-doc
-          ccache --show-stats
-      - uses: actions/upload-artifact@v4
-        with:
-          name: build-system-fedora-rust-nightly
-          path: |
-            build/
-            .git-submodule-status
-          retention-days: 2
-
   check-rust-tools-nightly:
     name: check-rust-tools-nightly (optional)
     runs-on: ubuntu-latest
-    needs: build-system-fedora-rust-nightly
+    needs: [build-system-fedora-rust-nightly]
     continue-on-error: true
     container:
-      image: registry.gitlab.com/qemu-project/qemu/fedora-rust-nightly:latest
+      image: ${{ env.IMAGE_BASE }}/fedora-rust-nightly:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -479,8 +1106,7 @@ jobs:
           name: build-system-fedora-rust-nightly
       - name: Rust checks
         run: |
-          cd build
-          find . -type f -exec touch {} +
+          cd build && find . -type f -exec touch {} +
           pyvenv/bin/meson devenv -w ../rust ${CARGO:-cargo} fmt --check
           make clippy
           make rustdoc
@@ -492,200 +1118,7 @@ jobs:
           retention-days: 2
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CROSS-BUILDS
-# ─────────────────────────────────────────────────────────────────────────────
-
-  cross-arm64-system:
-    name: cross-arm64-system
-    runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/debian-arm64-cross:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: cross-arm64-system-${{ github.sha }}
-          restore-keys: cross-arm64-system-
-      - name: Cross-build (arm64 system)
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info --cross-prefix=aarch64-linux-gnu- \
-            --target-list="$(cd ../configs/targets && ls *-softmmu.mak | \
-              xargs -I{} basename {} .mak | tr '\n' ',')" || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          ccache --show-stats
-
-  cross-arm64-user:
-    name: cross-arm64-user
-    runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/debian-arm64-cross:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: cross-arm64-user-${{ github.sha }}
-          restore-keys: cross-arm64-user-
-      - name: Cross-build (arm64 user)
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info --cross-prefix=aarch64-linux-gnu- \
-            --target-list="$(cd ../configs/targets && ls *-linux-user.mak | \
-              xargs -I{} basename {} .mak | tr '\n' ',')" || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          ccache --show-stats
-
-  cross-mips64el-system:
-    name: cross-mips64el-system
-    runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/debian-mips64el-cross:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: cross-mips64el-system-${{ github.sha }}
-          restore-keys: cross-mips64el-system-
-      - name: Cross-build (mips64el system)
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info --cross-prefix=mips64el-linux-gnuabi64- \
-            --target-list="mips64el-softmmu" || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          ccache --show-stats
-
-  cross-ppc64el-system:
-    name: cross-ppc64el-system
-    runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/debian-ppc64el-cross:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: cross-ppc64el-system-${{ github.sha }}
-          restore-keys: cross-ppc64el-system-
-      - name: Cross-build (ppc64el system)
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info --cross-prefix=powerpc64le-linux-gnu- \
-            --target-list="ppc64-softmmu" || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          ccache --show-stats
-
-  cross-riscv64-system:
-    name: cross-riscv64-system
-    runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/debian-riscv64-cross:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: cross-riscv64-system-${{ github.sha }}
-          restore-keys: cross-riscv64-system-
-      - name: Cross-build (riscv64 system)
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info --cross-prefix=riscv64-linux-gnu- \
-            --target-list="riscv64-softmmu" || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          ccache --show-stats
-
-  cross-s390x-system:
-    name: cross-s390x-system
-    runs-on: ubuntu-latest
-    container:
-      image: registry.gitlab.com/qemu-project/qemu/debian-s390x-cross:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          filter: blob:none
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ccache
-          key: cross-s390x-system-${{ github.sha }}
-          restore-keys: cross-s390x-system-
-      - name: Cross-build (s390x system)
-        run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
-          JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
-          ../configure --enable-werror --disable-docs --enable-fdt=system \
-            --disable-debug-info --cross-prefix=s390x-linux-gnu- \
-            --target-list="s390x-softmmu" || \
-            { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          ccache --show-stats
-
-# ─────────────────────────────────────────────────────────────────────────────
 # WINDOWS BUILD (MSYS2 / MinGW64)
-# Mirrors the msys2-64bit GitLab job which ran on a Windows SaaS runner.
 # ─────────────────────────────────────────────────────────────────────────────
 
   msys2-64bit:
@@ -697,22 +1130,17 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: false
-
-      - name: Restore ccache
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ccache
           key: msys2-64bit-${{ github.sha }}
           restore-keys: msys2-64bit-
-
-      - name: Set up MSYS2 (MinGW64)
-        uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
           install: >-
-            base-devel
-            git
+            base-devel git
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-glib2
             mingw-w64-x86_64-pixman
@@ -721,22 +1149,16 @@ jobs:
             mingw-w64-x86_64-meson
             mingw-w64-x86_64-ccache
             mingw-w64-x86_64-rust
-
-      - name: Build (MSYS2 shell)
+      - name: Build
         shell: msys2 {0}
         run: |
-          export CCACHE_BASEDIR="$(pwd)"
-          export CCACHE_DIR="$CCACHE_BASEDIR/ccache"
-          export CCACHE_MAXSIZE="500M"
+          export CCACHE_BASEDIR="$(pwd)" CCACHE_DIR="$(pwd)/ccache" CCACHE_MAXSIZE=500M
           JOBS=$(expr $(nproc) + 1)
-          mkdir build && cd build
-          ccache --zero-stats
+          mkdir build && cd build && ccache --zero-stats
           ../configure --disable-system --enable-tools \
             -Ddebug=false -Doptimization=0 --enable-rust || \
             { cat config.log meson-logs/meson-log.txt; exit 1; }
-          make -j"$JOBS"
-          ccache --show-stats
-
+          make -j"$JOBS" && ccache --show-stats
       - uses: actions/upload-artifact@v4
         if: always()
         with:
