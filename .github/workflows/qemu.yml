@@ -181,7 +181,7 @@ jobs:
           ../configure --with-coroutine=sigaltstack --enable-rust \
             --target-list="${{ matrix.target }}"
           ${{ env.MAKE }} -j$(nproc)
-${{ env.MAKE }} check-build
+          ${{ env.MAKE }} check-build
 
       - name: Rename binary
         run: |
@@ -233,57 +233,6 @@ ${{ env.MAKE }} check-build
             --target-list="${{ matrix.target }}"
           ${{ env.MAKE }} -j$(nproc)
           ${{ env.MAKE }} check-build check-doc
-
-      - name: Rename binary
-        run: |
-          cd build
-          get_architecture_name() {
-            local target=$1
-            case "$target" in
-              aarch64|arm64) echo "arm64" ;;
-              arm*) echo "arm32" ;;
-              x86_64) echo "x86_64" ;;
-              i386|i686) echo "x86_32" ;;
-              *) echo "$target" ;;
-            esac
-          }
-          for binary in qemu-system-*; do
-            if [ -f "$binary" ]; then
-              target="${binary#qemu-system-}"
-              target="${target%-softmmu}"
-              target="${target%-linux-user}"
-              arch=$(get_architecture_name "$target")
-              if [ "$(uname)" = "Windows" ]; then
-                mv "$binary" "qemu-system-$arch.exe"
-              else
-                mv "$binary" "qemu-system-$arch"
-              fi
-            fi
-          done
-
-  build-centos:
-    name: Build CentOS
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/centos9:latest
-    strategy:
-      matrix:
-        target: [ppc64-softmmu, or1k-softmmu, s390x-softmmu, x86_64-softmmu, rx-softmmu, sh4-softmmu]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --disable-nettle --enable-gcrypt --enable-vfio-user-server \
-            --enable-modules --enable-trace-backends=dtrace --enable-docs \
-            --target-list="${{ matrix.target }}"
-          ${{ env.MAKE }} -j$(nproc)
-          ${{ env.MAKE }} check-build
 
       - name: Rename binary
         run: |
