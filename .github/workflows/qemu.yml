@@ -64,7 +64,6 @@ jobs:
     name: Build Alpine
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/centos9:latest
     strategy:
       matrix:
         target: [avr-softmmu, loongarch64-softmmu, mips64-softmmu, mipsel-softmmu]
@@ -114,7 +113,6 @@ jobs:
     name: Build Ubuntu
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/ubuntu:22.04
     strategy:
       matrix:
         target: [alpha-softmmu, microblaze-softmmu, mips64el-softmmu]
@@ -164,7 +162,6 @@ jobs:
     name: Build Debian
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/debian:latest
     strategy:
       matrix:
         target: [arm-softmmu, i386-softmmu, riscv64-softmmu, sh4eb-softmmu, sparc-softmmu, xtensa-softmmu]
@@ -214,7 +211,6 @@ jobs:
     name: Build CentOS
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/centos9:latest
     strategy:
       matrix:
         target: [ppc64-softmmu, or1k-softmmu, s390x-softmmu, x86_64-softmmu, rx-softmmu, sh4-softmmu]
@@ -265,7 +261,6 @@ jobs:
     name: Build openSUSE
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/opensuse-leap:latest
     strategy:
       matrix:
         target: [s390x-softmmu, x86_64-softmmu, aarch64-softmmu]
@@ -314,7 +309,6 @@ jobs:
     name: Build user mode
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/debian-all-test-cross:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -361,7 +355,6 @@ jobs:
     name: Build static user mode
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/debian-all-test-cross:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -407,7 +400,6 @@ jobs:
     name: Build hexagon user mode
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/debian-hexagon-cross:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -427,7 +419,6 @@ jobs:
     name: Build some softmmu
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/debian-all-test-cross:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -474,7 +465,6 @@ jobs:
     name: Build loongarch64
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/debian-loongarch-cross:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -494,7 +484,6 @@ jobs:
     name: Build tricore
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/debian-tricore-cross:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -541,7 +530,6 @@ jobs:
     name: Clang build (system)
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/fedora:latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -589,7 +577,6 @@ jobs:
     name: Clang build (user)
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/debian-all-test-cross:latest
     timeout-minutes: 70
     steps:
       - name: Checkout
@@ -638,7 +625,6 @@ jobs:
     name: CFI build x86_64
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/fedora:latest
     timeout-minutes: 70
     steps:
       - name: Checkout
@@ -687,7 +673,6 @@ jobs:
     name: TSAN build
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/ubuntu:22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -734,7 +719,6 @@ jobs:
     name: GCOV coverage
     needs: containers
     runs-on: ubuntu-latest
-    container: qemu/ubuntu:22.04
     timeout-minutes: 80
     steps:
       - name: Checkout
@@ -778,484 +762,37 @@ jobs:
             fi
           done
 
-      - name: Generate coverage report
-        run: |
-          cd build
-          gcovr --xml-pretty --exclude-unreachable-branches --print-summary \
-            -o coverage.xml --root ${{ github.workspace }} . *.p
+  # static-checks:
+  #   name: Static checks
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 1
+  #
+  #     - name: Run check-patch
+  #       run: |
+  #         pip install --quiet nox
+  #         nox -s check-patch -- "$GITHUB_SHA" HEAD~1
+  #
+  #     - name: Run check-dco
+  #       run: |
+  #         python3 .gitlab-ci.d/check-dco.py HEAD~1..HEAD
 
-      - name: Upload coverage
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: build/coverage.xml
-
-  build-tci:
-    name: TCI build
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-all-test-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          TARGETS="aarch64 arm hppa m68k microblaze ppc64 s390x x86_64"
-          mkdir build
-          cd build
-          ../configure --enable-tcg-interpreter --disable-kvm --disable-docs --disable-gtk --disable-vnc \
-            --target-list="$(for tg in $TARGETS; do echo -n ${tg}'-softmmu '; done)"
-          ${{ env.MAKE }} -j$(nproc)
-          ${{ env.MAKE }} tests/qtest/boot-serial-test tests/qtest/cdrom-test
-          for tg in $TARGETS; do
-            export QTEST_QEMU_BINARY="./qemu-system-${tg}"
-            ./tests/qtest/boot-serial-test || exit 1
-            ./tests/qtest/cdrom-test || exit 1
-          done
-          ${{ env.MAKE }} check-tcg
-
-      - name: Rename binary
-        run: |
-          cd build
-          get_architecture_name() {
-            local target=$1
-            case "$target" in
-              aarch64|arm64) echo "arm64" ;;
-              arm*) echo "arm32" ;;
-              x86_64) echo "x86_64" ;;
-              i386|i686) echo "x86_32" ;;
-              *) echo "$target" ;;
-            esac
-          }
-          for binary in qemu-system-*; do
-            if [ -f "$binary" ]; then
-              target="${binary#qemu-system-}"
-              target="${target%-softmmu}"
-              target="${target%-linux-user}"
-              arch=$(get_architecture_name "$target")
-              if [ "$(uname)" = "Windows" ]; then
-                mv "$binary" "qemu-system-$arch.exe"
-              else
-                mv "$binary" "qemu-system-$arch"
-              fi
-            fi
-          done
-
-  build-without-defaults:
-    name: Build without defaults
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/centos9:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --without-default-devices \
-            --without-default-features \
-            --disable-fdt \
-            --disable-pie \
-            --disable-qom-cast-debug \
-            --disable-strip \
-            --target-list-exclude=aarch64-softmmu,mips64-softmmu,mipsel-softmmu,ppc64-softmmu,sh4el-softmmu,xtensa-softmmu,x86_64-softmmu
-          ${{ env.MAKE }} -j$(nproc)
-          ${{ env.MAKE }} check
-
-  build-oss-fuzz:
-    name: OSS-Fuzz build
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/fedora:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          LSAN_OPTIONS=suppressions=scripts/lsan_suppressions.txt
-          CC="clang" CXX="clang++" CFLAGS="-fsanitize=address" ./scripts/oss-fuzz/build.sh
-          ASAN_OPTIONS="fast_unwind_on_malloc=0"
-          failures=0
-          for fuzzer in $(find ./build-oss-fuzz/DEST_DIR/ -executable -type f | grep -v slirp); do
-            grep "LLVMFuzzerTestOneInput" ${fuzzer} > /dev/null 2>&1 || continue
-            echo Testing ${fuzzer} ...
-            "${fuzzer}" -runs=1 -seed=1 || { echo "FAILED:" ${fuzzer} exit code is $?; failures=$(($failures+1)); }
-          done
-          echo "Number of failures:" $failures
-          test $failures = 0
-
-  tcg-disabled:
-    name: TCG disabled (KVM only)
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/centos9:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build and test
-        run: |
-          mkdir build
-          cd build
-          ../configure --disable-tcg --audio-drv-list="" --with-coroutine=ucontext \
-            --disable-docs --disable-sdl --disable-gtk --disable-vnc
-          ${{ env.MAKE }} -j$(nproc)
-          ${{ env.MAKE }} check-unit
-          ${{ env.MAKE }} check-qapi-schema
-          ./run tests/qemu-iotests/check -raw 001 002 003 004 005 008 009 010 011 012 021 025 032 033 048 052 063 077 086 101 104 106 113 148 150 151 152 157 159 160 163 170 171 184 192 194 208 221 226 227 236 253 277 image-fleecing
-          ./run tests/qemu-iotests/check -qcow2 028 051 056 057 058 065 068 082 085 091 095 096 102 122 124 132 139 142 144 145 151 152 155 157 165 194 196 200 202 208 209 216 218 227 234 246 247 248 250 254 255 257 258 260 261 262 263 264 270 272 273 277 image-fleecing
-          ${{ env.MAKE }} distclean
-
-  cross-arm64-system:
-    name: Cross build ARM64 system
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-arm64-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-arm64-user:
-    name: Cross build ARM64 user
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-arm64-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror --disable-system
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-arm64-kvm-only:
-    name: Cross build ARM64 KVM only
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-arm64-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --disable-tcg --without-default-features
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-mips64el-system:
-    name: Cross build MIPS64EL system
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-mips64el-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-mips64el-user:
-    name: Cross build MIPS64EL user
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-mips64el-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror --disable-system
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-ppc64el-system:
-    name: Cross build PPC64EL system
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-ppc64el-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-ppc64el-user:
-    name: Cross build PPC64EL user
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-ppc64el-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror --disable-system
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-ppc64el-kvm-only:
-    name: Cross build PPC64EL KVM only
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-ppc64el-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --disable-tcg --disable-devices
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-riscv64-system:
-    name: Cross build RISC-V64 system
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-riscv64-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-riscv64-user:
-    name: Cross build RISC-V64 user
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-riscv64-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror --disable-system
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-s390x-system:
-    name: Cross build s390x system
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-s390x-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-s390x-user:
-    name: Cross build s390x user
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-s390x-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-werror --disable-system
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-s390x-kvm-only:
-    name: Cross build s390x KVM only
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-s390x-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --disable-tcg --enable-trace-backends=ftrace
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-mips64el-kvm-only:
-    name: Cross build MIPS64EL KVM only
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-mips64el-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --disable-tcg --target-list=mips64el-softmmu
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-win64-system:
-    name: Cross build Windows
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/fedora-win64-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --enable-fdt=internal --disable-plugins \
-            --target-list-exclude=alpha-softmmu,avr-softmmu,hppa-softmmu,m68k-softmmu,microblaze-softmmu,or1k-softmmu,rx-softmmu,sh4eb-softmmu,sparc64-softmmu,tricore-softmmu,xtensaeb-softmmu
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-amd64-xen-only:
-    name: Cross build AMD64 Xen only
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-amd64-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --disable-tcg --disable-kvm
-          ${{ env.MAKE }} -j$(nproc)
-
-  cross-arm64-xen-only:
-    name: Cross build ARM64 Xen only
-    needs: containers
-    runs-on: ubuntu-latest
-    container: qemu/debian-arm64-cross:latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Build
-        run: |
-          mkdir build
-          cd build
-          ../configure --disable-tcg --disable-kvm
-          ${{ env.MAKE }} -j$(nproc)
-
-  static-checks:
-    name: Static checks
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Run check-patch
-        run: |
-          pip install --quiet nox
-          nox -s check-patch -- "$GITHUB_SHA" HEAD~1
-
-      - name: Run check-dco
-        run: |
-          python3 .gitlab-ci.d/check-dco.py HEAD~1..HEAD
-
-  opensbi:
-    name: OpenSBI build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 0
-
-      - name: Build OpenSBI
-        run: |
-          mkdir build
-          cd build
-          cmake -G Ninja .. -DOSDK_TOOLCHAIN=llvm
-          ninja
+  # opensbi:
+  #   name: OpenSBI build
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         submodules: true
+  #         fetch-depth: 0
+  #
+  #     - name: Build OpenSBI
+  #       run: |
+  #         mkdir build
+  #         cd build
+  #         cmake -G Ninja .. -DOSDK_TOOLCHAIN=llvm
+  #         ninja
