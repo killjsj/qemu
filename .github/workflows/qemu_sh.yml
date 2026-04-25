@@ -1,0 +1,65 @@
+name: QEMU CI sh
+
+on:
+  workflow_dispatch:
+
+env:
+  MAKE: make
+  PYTHON: python3
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+jobs:
+  build_on_windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+      - name: CI-Build
+        run: |
+          ./build_windows.sh
+  build_on_windows_arm64:
+    runs-on: windows-11-arm64
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: true
+      - name: CI-Build
+        run: |
+          ./build_windows.sh
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+            name: windows-arm64-build
+            path: done_zip/*.zip
+            retention-days: 5
+  build_on_linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: CI-Build
+        run: |
+          ./build_ubuntu.sh
+  build_on_arm64:
+    runs-on: ubuntu-22.04-arm64
+    steps:
+      - uses: actions/checkout@v5
+      - name: CI-Build
+        run: |
+          ./build_ubuntu.sh
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+            name: arm64-build
+            path: done_zip/*.zip
+            retention-days: 5

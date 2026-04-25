@@ -44,3 +44,6 @@ roms/seabios
 roms/SLOF
 qemu-10.2.2.tar.xz
 qemu-10.2.2.tar.xz.sig
+fin/*
+done_zip/*
+done_zip/
