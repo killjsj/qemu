@@ -114,14 +114,12 @@ cd build-win
 ROOT_DIR="$PWD"
 FIN_DIR="$ROOT_DIR/fin"
 
-
 for target in "${TARGETS[@]}"; do
     arch=$(echo "$target" | cut -d'-' -f1)
-    dest="$FIN_DIR/$arch"
 
-    # 每次清空 fin 目录，确保打包纯净
+    # 每次清空 fin 目录并建立统一的 bin/ 结构
     rm -rf "$FIN_DIR"
-    mkdir -p "$dest/share"
+    mkdir -p "$FIN_DIR/bin/share"
 
     exe="qemu-system-${arch}.exe"
     if [[ ! -f "$exe" ]]; then
@@ -129,21 +127,19 @@ for target in "${TARGETS[@]}"; do
         continue
     fi
 
-    # 复制可执行文件及其依赖库
-    ./ldd_deploy.sh -i "$exe" -o "$dest"
-    cp "$exe" "$dest/"
-
-    # 将 aarch64 的 exe 改名为 arm64（可选）
+    # 部署可执行文件及其依赖库到 bin/ 目录
+    ./ldd_deploy.sh -i "$exe" -o "$FIN_DIR/bin"
+    cp "$exe" "$FIN_DIR/bin/"
     if [[ $target == "aarch64-softmmu" ]]; then
-        mv "$dest/$exe" "$dest/qemu-system-arm64.exe"
+        mv "$FIN_DIR/bin/$exe" "$FIN_DIR/bin/qemu-system-arm64.exe"
     fi
 
-    # 复制 BIOS 文件
-    cp -r ../pc-bios/* "$dest/share/"
+    # 复制 BIOS 固件到 bin/share/
+    cp -r ../pc-bios/* "$FIN_DIR/bin/share/"
 
-    # 打包到 done_zip 目录
+    # 打包：只将 bin 目录压缩，保持根目录为 bin/
     echo "Packaging $target..."
-    (cd "$FIN_DIR" && zip -r "$DONE_DIR/windows-${target}.zip" *)
+    (cd "$FIN_DIR" && zip -r "$DONE_DIR/windows-${target}.zip" bin)
     echo "Created $DONE_DIR/windows-${target}.zip"
 done
 
