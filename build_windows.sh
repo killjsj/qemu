@@ -25,13 +25,12 @@ fi
 export PKG_CONFIG_PATH
 
 # 安装依赖（MSYS2 环境）
-pacman -Sy --noconfirm ${PKG_PREFIX}-toolchain zip
+pacman -Sy --noconfirm ${PKG_PREFIX}-toolchain zip git
 pacman -Sy --noconfirm ${PKG_PREFIX}-meson ${PKG_PREFIX}-ninja \
            ${PKG_PREFIX}-python \
            ${PKG_PREFIX}-python-sphinx \
            ${PKG_PREFIX}-python-sphinx_rtd_theme \
            ${PKG_PREFIX}-autotools \
-           ${PKG_PREFIX}-tools-git \
            ${PKG_PREFIX}-cc \
            ${PKG_PREFIX}-angleproject \
            ${PKG_PREFIX}-capstone \
