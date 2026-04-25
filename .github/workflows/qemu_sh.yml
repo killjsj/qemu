@@ -23,6 +23,12 @@ jobs:
       - name: CI-Build
         run: |
           ./build_windows.sh
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+            name: windows-amd64-build
+            path: done_zip/*.zip
+            retention-days: 5
   build_on_windows_arm64:
     runs-on: windows-11-arm64
     defaults:
@@ -53,6 +59,12 @@ jobs:
       - name: CI-Build
         run: |
           ./build_ubuntu.sh
+      - name: 'Upload Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+            name: linux-amd64-build
+            path: done_zip/*.zip
+            retention-days: 5
   build_on_arm64:
     runs-on: ubuntu-22.04-arm64
     steps:
@@ -66,6 +78,6 @@ jobs:
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:
-            name: arm64-build
+            name: linux-arm64-build
             path: done_zip/*.zip
             retention-days: 5
