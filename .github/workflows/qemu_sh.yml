@@ -47,6 +47,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: chmod+x
+        run: |
+          chmod +x ./build_ubuntu.sh
       - name: CI-Build
         run: |
           ./build_ubuntu.sh
@@ -54,6 +57,9 @@ jobs:
     runs-on: ubuntu-22.04-arm64
     steps:
       - uses: actions/checkout@v5
+      - name: chmod+x
+        run: |
+          chmod +x ./build_ubuntu.sh
       - name: CI-Build
         run: |
           ./build_ubuntu.sh
