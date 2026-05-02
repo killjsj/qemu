@@ -1,5 +1,36 @@
 #pragma once
 #pragma pack(push, 1)
+enum InputEventType {
+    INPUT_EVENT_NONE = 0,
+    INPUT_EVENT_KEY,
+    INPUT_EVENT_MOUSE_BUTTON_STATE,   // 按钮状态整体更新
+    INPUT_EVENT_MOUSE_MOVE,           // 绝对移动（含 Godot 视口尺寸）
+    INPUT_EVENT_MOUSE_WHEEL
+};
+
+typedef struct GodotInputEvent {
+    uint32_t type;          // InputEventType
+    int32_t  console_index; // 关联的屏幕索引（支持多头显示）
+
+    // 键盘
+    uint32_t keycode;       // QKeyCode 枚举
+    bool     pressed;
+
+    // 鼠标按钮状态
+    uint32_t button_state;  // 位掩码，每位对应 INPUT_BUTTON_*
+    int32_t  delta_z;
+
+
+    // 鼠标绝对坐标（Godot 视口内的像素位置）
+    int32_t  mouse_x;
+    int32_t  mouse_y;
+
+    // Godot 视口的实际宽高（用于映射到 guest 显示区域）
+    int32_t  godot_w;
+    int32_t  godot_h;
+    // 滚轮增量（保留，可后续扩展）
+    int32_t  wheel_delta;
+} GodotInputEvent;
 
 struct SingleScreen {
 	bool isNewFrame;
@@ -14,7 +45,7 @@ struct SingleScreen {
     int w;
     int h;
     char shmName[128];
-    char mutexName[300];
+    char mutexName[128];
 #ifndef _WIN32
     pthread_mutex_t lock;      /* Linux: 互斥锁对象直接存在这里 */
 #else
@@ -31,9 +62,14 @@ struct SingleScreen {
 };
 
 typedef struct SingleScreen SingleScreen;
-
+#define INPUT_RING_SIZE 256
 struct BufferStruct {
     int screen_count;
+    char input_sem_name[256];  
+    uint32_t input_write_idx;
+    uint32_t input_read_idx;
+    struct GodotInputEvent input_events[INPUT_RING_SIZE];
     SingleScreen screens[];
+    
 };
 #pragma pack(pop)
