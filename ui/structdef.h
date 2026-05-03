@@ -32,14 +32,25 @@ typedef struct GodotInputEvent {
     int32_t  wheel_delta;
 } GodotInputEvent;
 
-struct SingleScreen {
+struct screen_buffer_meta{
+    bool Write_Available;
+    bool ClientReading;
+	bool ServerWriting;
 	bool isNewFrame;
-	bool ServerWritingA;
-    bool ServerWritingB;
+    bool isPartialUpdate;
+    int lastChangedX;
+    int lastChangedY;
+    int lastChangedW;
+    int lastChangedH;
+    uint32_t data_offset;    /* 始终为 dataA_size */
+    uint32_t data_size;
+};
+typedef struct screen_buffer_meta screen_buffer_meta;
+struct SingleScreen {
+    bool isNotGraphic;
     bool ServerSwitched;
-    bool Server_B_Available;
-    bool ClientReadingA;
-    bool ClientReadingB;
+    bool isDirty;
+    bool next_write_to_b;
     int id;
     int ImageFormat;
     int w;
@@ -54,22 +65,20 @@ struct SingleScreen {
 #endif
     uint32_t stride;
     uint32_t data_version;    /* 内存重建计数器 */
-    uint32_t dataA_offset;    /* 始终为 0 */
-    uint32_t dataB_offset;    /* 始终为 dataA_size */
-    uint32_t dataA_size;
-    uint32_t dataB_size;
+    screen_buffer_meta metaA;
+    screen_buffer_meta metaB;
     uint64_t total_data_size; /* 当前 Data SHM 的总字节数 */
 };
 
 typedef struct SingleScreen SingleScreen;
-#define INPUT_RING_SIZE 256
+#define INPUT_RING_SIZE 2048
 struct BufferStruct {
     int screen_count;
-    char input_sem_name[256];  
+    char input_sem_name[128];
     uint32_t input_write_idx;
     uint32_t input_read_idx;
     struct GodotInputEvent input_events[INPUT_RING_SIZE];
     SingleScreen screens[];
-    
+
 };
 #pragma pack(pop)

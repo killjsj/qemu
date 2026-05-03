@@ -2,9 +2,28 @@
 
 #include "lock.h"
 #include "qapi/qapi-types-ui.h"
-#include "qemu/main-loop.h" // 推荐使用 QEMU 原子宏
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
+#include "qemu/main-loop.h" // 推荐使用 QEMU 原子宏
+#ifdef _WIN32
+// 模拟 __atomic_load_n(p, __ATOMIC_ACQUIRE)
+static inline uint32_t atomic_load_acquire(const uint32_t *ptr) {
+  return *(const volatile uint32_t *)ptr;
+}
+
+// 原子写 + 释放语义（使用 InterlockedExchange 自带全屏障）
+static inline void atomic_store_release(uint32_t *ptr, uint32_t val) {
+  InterlockedExchange((volatile LONG *)ptr, (LONG)val);
+}
+#else
+// Linux 下继续使用 GCC 内建函数（原实现即可）
+static inline uint32_t atomic_load_acquire(const uint32_t *ptr) {
+  return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+}
+static inline void atomic_store_release(uint32_t *ptr, uint32_t val) {
+  __atomic_store_n(ptr, val, __ATOMIC_RELEASE);
+}
+#endif
 #include "qemu/log-for-trace.h"
 #include "qemu/module.h"
 #include "ui/console.h"
@@ -61,14 +80,91 @@ static inline void MemsBar(void) {
 }
 static void *hSem;
 static bool graphics_ready = false;
+
+static QEMUBH *sb_input_bh;
+
+/* * 这是 BH 处理函数，由 QEMU 主线程调用。
+ * 注意：在这里执行时，BQL 已经被主线程持有，无需手动加锁！
+ */
+static void sb_input_bh_handler(void *opaque) {
+  struct BufferStruct *bs = global_buffer_header;
+  if (!bs)
+    return;
+
+  uint32_t writer = atomic_load_acquire(&bs->input_write_idx);
+  uint32_t reader = atomic_load_acquire(&bs->input_read_idx);
+  uint32_t pending = (writer - reader) & (INPUT_RING_SIZE - 1);
+  if (pending > 10) {
+    qemu_log("Warning: Input lag detected, pending events: %u\n", pending);
+  }
+  while (reader != writer) {
+    GodotInputEvent *ev = &bs->input_events[reader & (INPUT_RING_SIZE - 1)];
+    QemuConsole *con = qemu_console_lookup_by_index(ev->console_index);
+
+    switch (ev->type) {
+
+    case INPUT_EVENT_KEY:
+      qemu_input_event_send_key_qcode(NULL, (QKeyCode)ev->keycode, ev->pressed);
+      qemu_input_event_sync();
+      break;
+
+    case INPUT_EVENT_MOUSE_BUTTON_STATE: {
+      if (con) {
+        static uint32_t bmap[INPUT_BUTTON__MAX] = {
+            [INPUT_BUTTON_LEFT] = 1 << INPUT_BUTTON_LEFT,
+            [INPUT_BUTTON_MIDDLE] = 1 << INPUT_BUTTON_MIDDLE,
+            [INPUT_BUTTON_RIGHT] = 1 << INPUT_BUTTON_RIGHT,
+        };
+        static uint32_t prev_state = 0;
+        if (prev_state != ev->button_state) {
+          qemu_input_update_buttons(con, bmap, prev_state, ev->button_state);
+          prev_state = ev->button_state;
+          qemu_input_event_sync();
+
+        }
+      }
+      break;
+    }
+
+    case INPUT_EVENT_MOUSE_MOVE: {
+      if (ev->godot_w > 0 && ev->godot_h > 0) {
+        int x = (int64_t)ev->mouse_x * 0x7FFF / ev->godot_w;
+        int y = (int64_t)ev->mouse_y * 0x7FFF / ev->godot_h;
+        x = CLAMP(x, 0, 0x7FFF);
+        y = CLAMP(y, 0, 0x7FFF);
+        qemu_input_queue_abs(con, INPUT_AXIS_X, x, 0, 0x7FFF);
+        qemu_input_queue_abs(con, INPUT_AXIS_Y, y, 0, 0x7FFF);
+        qemu_input_event_sync();
+      }
+      break;
+    }
+
+    case INPUT_EVENT_MOUSE_WHEEL: {
+      int idx = ev->console_index;
+      if (con && ev->wheel_delta != 0) {
+        InputButton btn = (ev->wheel_delta > 0) ? INPUT_BUTTON_WHEEL_UP
+                                                : INPUT_BUTTON_WHEEL_DOWN;
+        qemu_input_queue_btn(con, btn, true);
+        qemu_input_event_sync();
+        qemu_input_queue_btn(con, btn, false);
+        qemu_input_event_sync();
+      }
+      break;
+    }
+    }
+
+    reader++;
+  }
+  atomic_store_release(&bs->input_read_idx, reader);
+}
+
 #ifdef _WIN32
 static DWORD WINAPI sb_input_thread(LPVOID lpParam)
 #else
 static void *sb_input_thread(void *arg)
 #endif
 {
-  struct BufferStruct *bs = global_buffer_header;
-  if (!bs) {
+  if (!global_buffer_header) {
 #ifndef _WIN32
     return NULL;
 #else
@@ -81,130 +177,33 @@ static void *sb_input_thread(void *arg)
 #else
   sem_t *sem_handle = (sem_t *)hSem;
 #endif
-  qemu_log("Input thread launched.\n");
+
+  qemu_log("Input thread launched. Waiting for events...\n");
+
   while (1) {
-    uint32_t writer, reader;
-    
-      writer = __atomic_load_n(&bs->input_write_idx, __ATOMIC_ACQUIRE);
-      reader = __atomic_load_n(&bs->input_read_idx, __ATOMIC_ACQUIRE);
-            if (reader == writer) {
-            // 队列空，短暂休眠避免空转
+    // 【核心修改】：真正的阻塞等待，不再消耗 CPU
 #ifdef _WIN32
-            Sleep(1);
+    WaitForSingleObject(sem_handle, INFINITE);
 #else
-            usleep(1000);
+    // 处理可能被信号中断的情况
+    while (sem_wait(sem_handle) == -1 && errno == EINTR) {
+      continue;
+    }
 #endif
-            continue;
-        }
-    while (reader != writer) {
-      GodotInputEvent *ev = &bs->input_events[reader & (INPUT_RING_SIZE - 1)];
-
-      switch (ev->type) {
-      case INPUT_EVENT_KEY:
-        bql_lock();
-        qemu_input_event_send_key_qcode(NULL, (QKeyCode)ev->keycode,
-                                        ev->pressed);
-                                        bql_unlock();
-        break;
-
-      case INPUT_EVENT_MOUSE_BUTTON_STATE: {
-        QemuConsole *con = qemu_console_lookup_by_index(ev->console_index);
-        if (con) {
-          static uint32_t bmap[INPUT_BUTTON__MAX] = {
-              [INPUT_BUTTON_LEFT] = 1 << INPUT_BUTTON_LEFT,
-              [INPUT_BUTTON_MIDDLE] = 1 << INPUT_BUTTON_MIDDLE,
-              [INPUT_BUTTON_RIGHT] = 1 << INPUT_BUTTON_RIGHT,
-          };
-          static uint32_t prev_state = 0;
-          if (prev_state != ev->button_state) {
-        bql_lock();
-            qemu_input_update_buttons(con, bmap, prev_state, ev->button_state);
-            prev_state = ev->button_state;
-            bql_unlock();
-          }
-        }
-        break;
-      }
-
-      case INPUT_EVENT_MOUSE_MOVE: {
-        int idx = ev->console_index;
-        if (idx >= 0 && idx < bs->screen_count) {
-          SingleScreen *ss = &bs->screens[idx];
-          QemuConsole *con = qemu_console_lookup_by_index(idx);
-          if (con) {
-            int guest_w = ss->w;
-            int guest_h = ss->h;
-            int godot_w = ev->godot_w > 0 ? ev->godot_w : 1;
-            int godot_h = ev->godot_h > 0 ? ev->godot_h : 1;
-
-            int abs_x = (ev->mouse_x * guest_w) / godot_w;
-            int abs_y = (ev->mouse_y * guest_h) / godot_h;
-
-        bql_lock();
-            if (qemu_input_is_absolute(con)) {
-              qemu_input_queue_abs(con, INPUT_AXIS_X, abs_x, 0, guest_w);
-              qemu_input_queue_abs(con, INPUT_AXIS_Y, abs_y, 0, guest_h);
-            } else {
-              qemu_input_queue_rel(con, INPUT_AXIS_X, ev->mouse_x);
-              qemu_input_queue_rel(con, INPUT_AXIS_Y, ev->mouse_y);
-            }
-            qemu_input_event_sync();
-            bql_unlock();
-          }
-        }
-        break;
-      case INPUT_EVENT_MOUSE_WHEEL: {
-        int idx = ev->console_index;
-        QemuConsole *con = qemu_console_lookup_by_index(idx);
-        if (con && ev->wheel_delta != 0) {
-          InputButton btn = (ev->wheel_delta > 0) ? INPUT_BUTTON_WHEEL_UP
-                                                  : INPUT_BUTTON_WHEEL_DOWN;
-        bql_lock();
-          qemu_input_queue_btn(con, btn, true);
-          qemu_input_event_sync();
-          qemu_input_queue_btn(con, btn, false);
-          qemu_input_event_sync();
-          bql_unlock();
-        }
-        break;
-      }
-      }
-
-      default:
-        break;
-      }
-
-      __atomic_store_n(&bs->input_read_idx, reader + 1, __ATOMIC_RELEASE);
-      reader++;
+    // 走到这里，说明外部程序（如 Godot）写入了输入事件并释放了信号量
+    // 直接调度 BH，将任务转交给 QEMU 主线程处理
+    if (sb_input_bh) {
+      qemu_bh_schedule(sb_input_bh);
     }
   }
 
 #ifndef _WIN32
   return NULL;
+#else
+  return 0;
 #endif
 }
-
-static void sb_2d_refresh(DisplayChangeListener *dcl) {
-  graphic_hw_update(dcl->con);
-  DisplaySurface *surf = qemu_console_surface(dcl->con);
-  if (!surf)
-    return;
-  // 3) 创建信号量（初始计数为0，无事件时阻塞）
-  if (!graphics_ready) {
-    graphics_ready = true;
-    qemu_log(
-        "sharedbuffer: Graphics ready, input events will now be processed.\n");
-#ifdef _WIN32
-    HANDLE hThread = CreateThread(NULL, 0, sb_input_thread, NULL, 0, NULL);
-    if (hThread)
-      CloseHandle(hThread);
-#else
-    pthread_t tid;
-    pthread_create(&tid, NULL, sb_input_thread, NULL);
-    pthread_detach(tid);
-#endif
-  }
-  sb_console *sbc = container_of(dcl, sb_console, dcl);
+static void MemCpyScn(sb_console *sbc, DisplaySurface *surf) {
   uint8_t *base_addr = (uint8_t *)sbc->mmap_addr_data;
 
   if (!base_addr)
@@ -221,42 +220,137 @@ static void sb_2d_refresh(DisplayChangeListener *dcl) {
   int copy_linesize = cur_w * 4;
   int src_stride = surface_stride(surf);
   if (LockScreen(ss, true, 5)) {
-    bool writetob = !ss->Server_B_Available;
-    if (writetob && !ss->ClientReadingB) {
-      ss->ServerWritingB = true;
-      writetob = true;
-    } else if (!writetob && !ss->ClientReadingA) {
-      ss->ServerWritingA = true;
-      writetob = false;
-    } else {
-      if (ss->ClientReadingA) {
-        ss->ServerWritingB = true;
-        writetob = true;
-      } else if (ss->ClientReadingB) {
-        ss->ServerWritingA = true;
-        writetob = false;
-      }
-    }
-    uint32_t offset = (writetob) ? ss->dataB_offset : ss->dataA_offset;
-    uint8_t *dst = base_addr + offset;
-    ss->stride = src_stride;
-    ss->ImageFormat = surface_format(surf);
-    for (int i = 0; i < cur_h; i++) {
-      memcpy(dst + (i * (cur_w * 4)), src + (i * src_stride), copy_linesize);
+    bool next_write_to_b = !ss->next_write_to_b;
+
+    // 【关键修正】：检查客户端是否正在读我们要写的那个缓冲区
+    if (next_write_to_b && ss->metaB.ClientReading) {
+      // 客户端在读 B，我们不能写 B。强制写 A（即覆盖旧帧）
+      next_write_to_b = false;
+    } else if (!next_write_to_b && ss->metaA.ClientReading) {
+      // 客户端在读 A，我们不能写 A。强制写 B
+      next_write_to_b = true;
     }
 
-    if (writetob) {
-      ss->Server_B_Available = true;
-      ss->ServerWritingB = false;
+    // 标记服务端正在写入
+    if (next_write_to_b)
+      ss->metaB.ServerWriting = true;
+    else
+      ss->metaA.ServerWriting = true;
+    uint32_t active_offset =
+        next_write_to_b ? ss->metaB.data_offset : ss->metaA.data_offset;
+    UnlockScreen(ss, true);
+    uint8_t *dst = base_addr + active_offset;
+    ss->stride = src_stride;
+    ss->ImageFormat = surface_format(surf);
+    if (src_stride == copy_linesize) {
+      memcpy(dst, src, cur_h * copy_linesize); // 一次性大块拷贝
     } else {
-      ss->Server_B_Available = false;
-      ss->ServerWritingA = false;
+      for (int i = 0; i < cur_h; i++) {
+        memcpy(dst + (i * copy_linesize), src + (i * src_stride),
+               copy_linesize);
+      }
     }
-    ss->isNewFrame = true;
+    if (LockScreen(ss, true, 100)) {
+      ss->next_write_to_b = next_write_to_b; // 只有写完了才翻转可用标记
+      ss->metaB.ServerWriting = false;
+      ss->metaA.ServerWriting = false;
+      if (next_write_to_b) {
+        ss->metaB.isNewFrame = true; // 告诉客户端：B区现在有新数据了
+      } else {
+        ss->metaA.isNewFrame = true; // 告诉客户端：A区现在有新数据了
+      }
+      UnlockScreen(ss, true);
+    }
+  }
+}
+static void MemCpyScn_Area(sb_console *sbc, DisplaySurface *surf, int x, int y,
+                           int w, int h) {
+  uint8_t *base_addr = (uint8_t *)sbc->mmap_addr_data;
+  SingleScreen *ss = &global_buffer_header->screens[sbc->idx];
+
+  if (!base_addr || !surf)
+    return;
+
+  // 1. 快速决策写哪个块
+  if (!LockScreen(ss, true, 2))
+    return;
+  bool to_b = !ss->next_write_to_b;
+  // 检查 Godot 是否正在读我们要写的那个区，如果是，就强制写另一个
+  if (to_b && ss->metaB.ClientReading)
+    to_b = false;
+  else if (!to_b && ss->metaA.ClientReading)
+    to_b = true;
+
+  if (to_b)
+    ss->metaB.ServerWriting = true;
+  else
+    ss->metaA.ServerWriting = true;
+  uint32_t offset = to_b ? ss->metaB.data_offset : ss->metaA.data_offset;
+  UnlockScreen(ss, true);
+
+  // 2. 【核心优化】只拷贝变动区域 (Dirty Rect)
+  uint8_t *src_data = surface_data(surf);
+  uint8_t *dst_data = base_addr + offset;
+  int stride = surface_stride(surf); // 每行字节数
+  int bpp = 4;                       // RGBA
+
+  for (int i = 0; i < h; i++) {
+    // 计算每一行的起始偏移： (y + 当前行) * 一行长度 + (x * 4字节)
+    int line_offset = (y + i) * stride + (x * bpp);
+    memcpy(dst_data + line_offset, src_data + line_offset, w * bpp);
+  }
+
+  if (LockScreen(ss, true, 5)) {
+    ss->next_write_to_b = to_b; // 只有这里改了，客户端才会看到“新”缓冲区
+    ss->metaB.ServerWriting = false;
+    ss->metaA.ServerWriting = false;
+    if (to_b) {
+      ss->metaB.isNewFrame = true; // 告诉客户端：B区现在有新数据了
+    } else {
+      ss->metaA.isNewFrame = true; // 告诉客户端：A区现在有新数据了
+    }
     UnlockScreen(ss, true);
   }
 }
 
+// 修改 update 回调
+static void sb_2d_update(DisplayChangeListener *dcl, int x, int y, int w,
+                         int h) {
+  if (!qemu_console_is_graphic(dcl->con)) {
+    return;
+  }
+  sb_console *sbc = container_of(dcl, sb_console, dcl);
+
+  DisplaySurface *surf = qemu_console_surface(dcl->con);
+  // 只拷贝变动的 x,y,w,h 区域
+  MemCpyScn_Area(sbc, surf, x, y, w, h);
+}
+static void sb_2d_refresh(DisplayChangeListener *dcl) {
+  graphic_hw_update(dcl->con);
+  if (!qemu_console_is_graphic(dcl->con)) {
+    return;
+  }
+  DisplaySurface *surf = qemu_console_surface(dcl->con);
+  if (!surf)
+    return;
+  // 3) 创建信号量（初始计数为0，无事件时阻塞）
+  if (!graphics_ready) {
+    graphics_ready = true;
+    qemu_log(
+        "sharedbuffer: Graphics ready, input events will now be processed.\n");
+    sb_input_bh = qemu_bh_new(sb_input_bh_handler, NULL);
+#ifdef _WIN32
+    HANDLE hThread = CreateThread(NULL, 0, sb_input_thread, NULL, 0, NULL);
+    if (hThread)
+      CloseHandle(hThread);
+#else
+    pthread_t tid;
+    pthread_create(&tid, NULL, sb_input_thread, NULL);
+    pthread_detach(tid);
+#endif
+  }
+  MemCpyScn(container_of(dcl, sb_console, dcl), surf);
+}
 static void sb_realloc_data_shm(sb_console *sbc, int width, int height,
                                 int pixman_format) {
   SingleScreen *ss = &global_buffer_header->screens[sbc->idx];
@@ -309,10 +403,10 @@ static void sb_realloc_data_shm(sb_console *sbc, int width, int height,
   ss->w = width;
   ss->h = height;
   ss->ImageFormat = pixman_format;
-  ss->dataA_size = (uint32_t)frame_size;
-  ss->dataB_size = (uint32_t)frame_size;
-  ss->dataA_offset = 0;
-  ss->dataB_offset = (uint32_t)frame_size;
+  ss->metaA.data_size = (uint32_t)frame_size;
+  ss->metaB.data_size = (uint32_t)frame_size;
+  ss->metaA.data_offset = 0;
+  ss->metaB.data_offset = (uint32_t)frame_size;
   ss->total_data_size = new_total_size;
   pstrcpy(ss->shmName, sizeof(ss->shmName), new_name);
   // InitLockServer(ss, new_name);
@@ -370,12 +464,14 @@ static const DisplayChangeListenerOps sb_2d_ops = {
     .dpy_name = "sb-2d",
     .dpy_gfx_switch = sb_2d_switch,
     .dpy_refresh = sb_2d_refresh,
+    .dpy_gfx_update = sb_2d_update,
 };
 
 static void sb_display_init(DisplayState *ds, DisplayOptions *o) {
   int i;
   for (i = 0;; i++) {
-    if (!qemu_console_lookup_by_index(i))
+    QemuConsole *con = qemu_console_lookup_by_index(i);
+    if (!con)
       break;
   }
   sb_num_outputs = i;
@@ -427,18 +523,22 @@ static void sb_display_init(DisplayState *ds, DisplayOptions *o) {
   for (i = 0; i < sb_num_outputs; i++) {
     QemuConsole *con = qemu_console_lookup_by_index(i);
     sb_console *sbc = &sb_console_ptr[i];
-
     sbc->con = con;
     sbc->idx = i;
     pstrcpy(sbc->id_str, sizeof(sbc->id_str), o->u.sharedbuffer.id);
     sbc->mmap_addr_ctrl = global_buffer_header;
-
+    global_buffer_header->screens[i].isNotGraphic = !qemu_console_is_graphic(con);
     /* 初始化元数据 */
     global_buffer_header->screens[i].id = i;
+    if(global_buffer_header->screens[i].isNotGraphic){
+        continue;
+    }
     global_buffer_header->screens[i].ServerSwitched = false;
-    global_buffer_header->screens[i].Server_B_Available = false;
-    global_buffer_header->screens[i].ServerWritingA = false;
-    global_buffer_header->screens[i].ServerWritingB = false;
+    global_buffer_header->screens[i].next_write_to_b = false;
+    global_buffer_header->screens[i].metaA.Write_Available = false;
+    global_buffer_header->screens[i].metaB.Write_Available = false;
+    global_buffer_header->screens[i].metaA.ServerWriting = false;
+    global_buffer_header->screens[i].metaB.ServerWriting = false;
     global_buffer_header->screens[i].data_version = 0;
     InitLockServer(&global_buffer_header->screens[i], o->u.sharedbuffer.id);
 
@@ -451,6 +551,27 @@ static void sb_display_init(DisplayState *ds, DisplayOptions *o) {
       register_displaychangelistener(&sbc->dcl);
     }
   }
+  char sem_name[128];
+
+#ifdef _WIN32
+  snprintf(sem_name, sizeof(sem_name), "Global\\Sem_%s", o->u.sharedbuffer.id);
+  hSem = CreateSemaphoreA(NULL, 0, INPUT_RING_SIZE, sem_name);
+#else
+  // Linux 命名信号量必须以 '/' 开头
+  snprintf(sem_name, sizeof(sem_name), "/Sem_%s", o->u.sharedbuffer.id);
+
+  // O_CREAT: 如果不存在则创建
+  // 0666: 权限设置
+  // 0: 初始计数
+  hSem = sem_open(sem_name, O_CREAT, 0666, 0);
+
+  if (hSem == SEM_FAILED) {
+    error_report("sharedbuffer: sem_open failed, errno:%d", errno);
+    hSem = NULL;
+  }
+#endif
+  pstrcpy(global_buffer_header->input_sem_name,
+          sizeof(global_buffer_header->input_sem_name), sem_name);
   global_buffer_header->input_write_idx = 0;
   global_buffer_header->input_read_idx = 0;
   qemu_log("sharedbuffer: Initialized with %d screens.\n", sb_num_outputs);
